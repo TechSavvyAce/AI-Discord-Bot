@@ -37,7 +37,7 @@ const register = async (req, res) => {
         await controllers_1.default.Auth.create({
             first_name,
             last_name,
-            email: (0, untils_1.Trim)(email),
+            email: (0, untils_1.Trim)(email).toLowerCase(),
             user_name,
             password: encryptedPassword,
             group,
@@ -58,7 +58,7 @@ const login = async (req, res) => {
             return res.send({ status: false, code: 400, message: 'Please enter all required data.' });
         }
         const user = await controllers_1.default.Auth.find({
-            filter: [{ email: (0, untils_1.Trim)(email) }]
+            filter: [{ email: (0, untils_1.Trim)(email).toLowerCase() }]
         });
         if (!user) {
             return res.send({ status: false, code: 404, message: 'User not exist, please register' });

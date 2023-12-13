@@ -3,128 +3,18 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.testAnswer = exports.initSocket = void 0;
+exports.initSocket = void 0;
 require('dotenv').config();
 const openai_1 = require("openai");
 const uuid_1 = require("uuid");
-const fs = require('fs');
-const controllers_1 = __importDefault(require("../controllers"));
-const configuration = new openai_1.Configuration({ apiKey: "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" });
+const nexus_1 = __importDefault(require("../controllers/nexus"));
+const configuration = new openai_1.Configuration({ apiKey: process.env.CHATGPTKEY });
 const openai = new openai_1.OpenAIApi(configuration);
-const initSocket = (io) => {
-    io.on('connection', (socket) => {
-        console.log('new connected:' + socket.id);
-        socket.join('chatgpt');
-        socket.on('disconnect', () => {
-            console.log('socket disconnected ' + socket.id);
-        });
-        /* join room */
-        socket.on('join room', (e) => {
-            console.log('join room =>', e.user_id);
-            e.group.map((item) => {
-                socket.join(item);
-                socket.join(e.user_id);
-            });
-        });
-        /* receive message from room */
-        socket.on('sent message to server', async (e) => {
-            const result1 = await saveMsg(e);
-            if (result1) {
-                const data = {
-                    from: result1.to,
-                    to: result1.from,
-                    message: result1.message,
-                    first_name: e.first_name,
-                    last_name: e.last_name,
-                    email: e.email,
-                    user_name: e.user_name,
-                    avatar: e.avatar,
-                    date: result1.date
-                };
-                socket.to(e.to).emit('group', data);
-            }
-            const result2 = await saveAnswer(result1, e.first_name);
-            if (result2) {
-                const data = {
-                    from: result2.from,
-                    to: result2.to,
-                    message: result2.message,
-                    first_name: e.first_name,
-                    last_name: e.last_name,
-                    email: e.email,
-                    user_name: 'GPT',
-                    avatar: e.avatar,
-                    date: result2.date
-                };
-                socket.to(e.to).emit('group', data);
-                socket.emit('chatgpt', data);
-            }
-        });
-    });
-};
-exports.initSocket = initSocket;
-const saveMsg = async (e) => {
-    try {
-        return await controllers_1.default.ChatHistory.create({
-            from: e.from,
-            to: e.to,
-            message: e.message,
-            date: new Date()
-        });
-    }
-    catch (err) {
-        console.log('chatHistory save error: ', err);
-    }
-};
-const saveAnswer = async (e, name) => {
-    try {
-        const history = await controllers_1.default.ChatHistory.find({
-            filter: [{}]
-        });
-        let prompt = [];
-        history.map((item1) => {
-            let mymgs = '';
-            if (item1.from !== "chatgpt") {
-                item1.message.map((item2) => {
-                    mymgs += item2 + ',';
-                });
-                prompt.push({
-                    role: "user",
-                    content: mymgs
-                });
-            }
-            else {
-                item1.message.map((item2) => {
-                    mymgs += item2 + ',';
-                });
-                prompt.push({
-                    role: "assistant",
-                    content: mymgs
-                });
-            }
-        });
-        const completion = await openai.createChatCompletion({
-            model: "gpt-4",
-            messages: prompt,
-            temperature: 0,
-            top_p: 1,
-        });
-        return await controllers_1.default.ChatHistory.create({
-            from: e.to,
-            to: e.from,
-            message: completion.data.choices[0].message?.content,
-            date: new Date()
-        });
-    }
-    catch (err) {
-        console.log('chatGPT error: ', err.message);
-    }
-};
-const getEmbedding = async (content, engine = 'text-embedding-ada-002') => {
-    const response = await openai.createEmbedding({ input: content, model: engine });
-    const vector = response.data.data[0]['embedding'];
-    return vector;
-};
+const fs = require('fs');
+const TelegramBot = require('node-telegram-bot-api');
+const token = process.env.TELEGRAMTOKEN; // Replace with your own bot token
+const serverId = process.env.TELEGRAMCHATID;
+const bot = new TelegramBot(token, { polling: true });
 function similarity(A, B) {
     var dotproduct = 0;
     var mA = 0;
@@ -143,24 +33,15 @@ const openFile = (filename) => {
     let rawdata = fs.readFileSync(filename, "utf8");
     return rawdata;
 };
-const saveFile = (filename, content) => {
-    let data = JSON.stringify(content);
-    fs.writeFileSync(filename, data);
+const getEmbedding = async (content, engine = 'text-embedding-ada-002') => {
+    const response = await openai.createEmbedding({ input: content, model: engine });
+    const vector = response.data.data[0]['embedding'];
+    return vector;
 };
-const saveJosn = (filename, info) => {
-    let data = JSON.stringify(info);
-    fs.writeFileSync(filename, data);
-};
-const loadJosn = (filename) => {
-    let rawdata = fs.readFileSync(filename);
-    let info = JSON.parse(rawdata);
-    return info;
-};
-const loadConvo = () => {
+const loadConvo = async () => {
     let result = [];
-    const files = fs.readdirSync('./public/nexus');
-    files.map((file) => {
-        const data = loadJosn(`./public/nexus/${file}`);
+    const d = await nexus_1.default.find({});
+    d.map((data) => {
         result.push(data);
     });
     return result;
@@ -185,16 +66,16 @@ const fetchMemories = (vector, logs, count) => {
     });
     return ordered.slice(0, count);
 };
-const gpt3Completion = async (prompt) => {
+const gpt4Completion = async (prompt) => {
     const completion = await openai.createChatCompletion({
         model: "gpt-4",
-        messages: [{ role: "user", content: "Hello world" }],
+        messages: [{ role: "user", content: prompt }],
         temperature: 0,
         top_p: 1,
     });
     return completion.data.choices[0].message?.content;
 };
-const summarizeMemories = async (memories) => {
+const summarizeMemories = async (memories, recent, currentMessage) => {
     memories = memories.sort((a, b) => {
         if (a.time < b.time) {
             return -1;
@@ -213,57 +94,57 @@ const summarizeMemories = async (memories) => {
         timestamps.push(memory['time']);
     });
     block = block.trim();
-    let prompt = openFile('./public/prompt_notes.txt').replace('<<INPUT>>', block);
-    let notes = await gpt3Completion(prompt);
-    let vector = await getEmbedding(block);
-    const timestamp = new Date().getTime();
-    const info = { 'notes': notes, 'uuids': identifiers, 'times': timestamps, 'uuid': (0, uuid_1.v4)(), 'vector': vector, 'time': timestamp };
-    const filename = `./notes_${timestamp}.json`;
-    saveJosn(`./public/internal_notes/${filename}`, info);
-    return notes || "";
+    let prompt = openFile('./public/prompt_response.txt').replace('<<CONVERSATION>>', block).replace('<<RECENT>>', recent).replace("<<MESSAGE>>", currentMessage);
+    let notes = await gpt4Completion(prompt);
+    return notes || "I am sorry.Some error in communication.";
 };
 const getLastMessages = (conversation, limit) => {
-    const short = conversation.slice(0, limit);
+    if (conversation.length == 1)
+        return "";
+    const short = conversation.reverse().slice(1, limit).reverse();
     let output = '';
     short.map((conv) => {
         output += `${conv['message']}\n\n`;
     });
     output = output.trim();
+    let username = '';
+    for (var i in userNames) {
+        if (userNames[i] !== undefined) {
+            username += userNames[i];
+        }
+    }
+    output += "Online users are " + username;
+    console.log(output, username);
     return output || "";
 };
-const testAnswer = async () => {
-    console.log("Start Tundu");
-    const a = "My name is Liguo,what is my name";
-    let vector = await getEmbedding(a);
-    const timestring = new Date().toLocaleString();
-    var uid = (0, uuid_1.v4)();
-    const timestamp = new Date().getTime();
-    let message = `USER: ${timestring} - ${a}`;
-    let info = { 'speaker': 'USER', 'time': timestamp, 'vector': vector, 'message': message, 'uuid': uid, 'timestring': timestring };
-    let filename = `log_${timestamp}_USER.json`;
-    saveJosn(`./public/nexus/${filename}`, info);
-    let conversation = await loadConvo();
-    let memories = fetchMemories(vector, conversation, 10);
-    let notes = await summarizeMemories(memories);
-    let recent = getLastMessages(conversation, 4);
-    let prompt = openFile('./public/prompt_response.txt').replace('<<NOTES>>', notes).replace('<<CONVERSATION>>', recent);
-    let output = await gpt3Completion(prompt);
-    vector = await getEmbedding(output);
-    message = `RAVEN: ${timestring} - ${output}`;
-    info = { 'speaker': 'RAVEN', 'time': timestamp, 'vector': vector, 'message': message, 'uuid': (0, uuid_1.v4)(), 'timestring': timestring };
-    filename = `log_${timestamp}_RAVEN.json`;
-    saveJosn(`./public/nexus/${filename}`, info);
-    console.log(`---------------------------\n\nRAVEN: ${output}`);
-    // const response = await openai.createEmbedding({model:"text-embedding-ada-002",input:message});
-    // const vector = response.data.data[0]['embedding'];
-    // console.log(vector)
-    // const completion = await openai.createChatCompletion({
-    //   model: "gpt-4",
-    //   messages: [{role:"user",content:"My name is tundu"}],
-    //   temperature: 0,
-    //   top_p: 1,
-    // })
-    // console.log("out put is ",completion.data.choices[0].message?.content,)
+let users = {};
+let userNames = {};
+const initSocket = () => {
+    bot.on('message', async (msg) => {
+        let data = {
+            from: msg.from.first_name,
+            to: msg.chat.id,
+            message: msg.text,
+            first_name: msg.from.first_name,
+            user_name: msg.from.username,
+            date: msg.data
+        };
+        let vector = await getEmbedding(data.message);
+        const timestring = new Date().toLocaleString();
+        var uid = (0, uuid_1.v4)();
+        const timestamp = new Date().getTime();
+        let info = { 'speaker': data.from, 'time': timestamp, 'vector': vector, 'message': `[${data.user_name}]:${data.message.join(",")}`, 'uuid': uid, 'timestring': timestring };
+        await nexus_1.default.create(info);
+        let conversation = await loadConvo();
+        let memories = fetchMemories(vector, conversation, 30);
+        let recent = getLastMessages(conversation, 30);
+        // console.log("Running BOT to", e.message);
+        let notes = await summarizeMemories(memories, recent, `[${data.user_name}]:${data.message.join(",")}`);
+        vector = await getEmbedding(notes);
+        info = { 'speaker': 'ASSISTANT', 'time': timestamp, 'vector': vector, 'message': `${notes}`, 'uuid': (0, uuid_1.v4)(), 'timestring': timestring };
+        await nexus_1.default.create(info);
+        bot.sendMessage(serverId, notes);
+    });
 };
-exports.testAnswer = testAnswer;
+exports.initSocket = initSocket;
 //# sourceMappingURL=index.js.map

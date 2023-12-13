@@ -6,6 +6,11 @@ import Nexus from '../controllers/nexus';
 const configuration = new Configuration({ apiKey: process.env.CHATGPTKEY });
 const openai = new OpenAIApi(configuration);
 const fs = require('fs');
+const TelegramBot = require('node-telegram-bot-api');
+
+const token = process.env.TELEGRAMTOKEN; // Replace with your own bot token
+// const serverId = process.env.TELEGRAMCHATID;
+const bot = new TelegramBot(token, { polling: true });
 
 function similarity(A: Array<number>, B: Array<number>) {
   var dotproduct = 0;
@@ -67,7 +72,7 @@ const fetchMemories = (vector: Array<any>, logs: Array<any>, count: number) => {
 
 const gpt4Completion = async (prompt: string) => {
   const completion = await openai.createChatCompletion({
-    model: "gpt-4",
+    model: "gpt-4-1106-preview",
     messages: [{ role: "user", content: prompt }],
     temperature: 0,
     top_p: 1,
@@ -89,7 +94,7 @@ const summarizeMemories = async (memories: Array<any>, recent: string, currentMe
   let identifiers: Array<any> = [];
   let timestamps: Array<any> = [];
   memories.map((memory) => {
-    block += memory['message'] + '\n\n'
+    block += `[${[memory['time']]}], ` + memory['message'] + '\n\n'
     identifiers.push(memory['uuid'])
     timestamps.push(memory['time'])
   })
@@ -103,8 +108,9 @@ const getLastMessages = (conversation: Array<any>, limit: number) => {
   if (conversation.length == 1) return "";
   const short = conversation.reverse().slice(1, limit).reverse();
   let output: string = '';
+  console.log(short, "short")
   short.map((conv) => {
-    output += `${conv['message']}\n\n`;
+    output += `[${conv['time']}], ${conv['message']}\n\n`;
   })
   output = output.trim();
   let username = '';
@@ -114,86 +120,71 @@ const getLastMessages = (conversation: Array<any>, limit: number) => {
     }
   }
   output += "Online users are " + username;
-  console.log(output,username);
+  console.log(output, username);
   return output || ""
 }
 
 let users = {} as { [key: string]: any }
 let userNames = {} as { [key: string]: any }
+let botUsername = '' as string;
+let groupchatId = 0 as number;
+let messageText = "" as string;
 
+export const initSocket = () => {
+  // Retrieve information about the bot itself
+  bot.getMe().then((me: any) => {
+    botUsername = me.username || '';
+    console.log(`Bot username is: @${botUsername}`);
+  }).catch((err: Error) => {
+    console.error(err);
+  });
 
-export const initSocket = (io: Server) => {
-  io.on('connection', (socket: Socket) => {
-    console.log('new connected:' + socket.id);
-    socket.join('chatgpt');
-    socket.on('disconnect', () => {
-      console.log('socket disconnected ' + socket.id);
-      delete users[socket.id];
-      delete userNames[socket.id];
-      io.emit("online users", users);
-    });
-    /* join room */
-    socket.on('join room', async (e: any) => {
-      console.log('join room =>', e.user_id);
-      e.group.map((item: string) => {
-        socket.join(item);
-        socket.join(e.user_id);
-        users[socket.id] = e.user_id;
-        userNames[socket.id] = e.user_name;
-      });
-      io.emit("online users", users);
-    });
-    /* receive message from room */
-    socket.on('sent message to server', async (e: any) => {
-      let data = {
-        from: e.to,
-        to: e.from,
-        message: e.message,
-        first_name: e.first_name,
-        last_name: e.last_name,
-        email: e.email,
-        user_name: e.user_name,
-        avatar: e.avatar,
-        date: e.date
-      };
-      socket.to(e.to).emit('group', data);
-      let vector = await getEmbedding(e.message);
-      const timestring = new Date().toLocaleString();
-      var uid = uuidv4();
-      const timestamp = new Date().getTime();
-      let info = { 'speaker': e.email, 'time': timestamp, 'vector': vector, 'message': `[${e.user_name}]:${e.message.join(",")}`, 'uuid': uid, 'timestring': timestring };
-      await Nexus.create(info);
+  bot.on('message', async (msg: any) => {
+    const chatId = msg.chat.id;
+    const username = msg.from.username;
+    console.log(msg);
+
+    if (msg.text) {
+      messageText = Array.isArray(msg.text) ? msg.text.join(",") : msg.text;
+    } else if (msg.new_chat_member) {
+      // Update the message text with information about the new member
+      messageText += `${msg.from.first_name} added ${msg.new_chat_member.first_name} to our group ${msg.chat.title}`;
+    } else if (msg.new_chat_title) {
+      messageText += `${msg.from.first_name} renamed our group title to ${msg.new_chat_title}`;
+    }
+    let data = {
+      from: msg.from.first_name,
+      to: msg.chat.id,
+      message: messageText,
+      first_name: msg.from.first_name,
+      user_name: msg.from.username,
+      date: msg.data
+    };
+
+    let vector = await getEmbedding(data.message);
+    const timestring = new Date().toLocaleString();
+    var uid = uuidv4();
+    const timestamp = new Date().getTime();
+    let info = { 'speaker': data.from, 'time': timestamp, 'vector': vector, 'message': `[${data.user_name}]:${messageText}`, 'uuid': uid, 'timestring': timestring };
+    await Nexus.create(info);
+
+    // console.log(messageText)
+    if (messageText.toLowerCase().includes(`@${botUsername.toLowerCase()}`)) {
+      console.log(`Received a message that mentions the bot: ${messageText}`);
       let conversation = await loadConvo();
+      // console.log(conversation, "conversation");
       let memories = fetchMemories(vector, conversation, 30);
+      // console.log(memories, "memories");
       let recent = getLastMessages(conversation, 30);
-      console.log("Running BOT to", e.message);
-      let notes = await summarizeMemories(memories, recent, `[${e.user_name}]:${e.message.join(",")}`)
+      // console.log(recent, "recent");
+      let notes = await summarizeMemories(memories, recent, `[${timestamp}], [${data.user_name}]:${messageText}`)
+      // console.log(notes, "notes");
       vector = await getEmbedding(notes);
       info = { 'speaker': 'ASSISTANT', 'time': timestamp, 'vector': vector, 'message': `${notes}`, 'uuid': uuidv4(), 'timestring': timestring }
       await Nexus.create(info);
-      data = {
-        from: e.to,
-        to: e.from,
-        message: [notes],
-        first_name: e.first_name,
-        last_name: e.last_name,
-        email: e.email,
-        user_name: 'GPT',
-        avatar: e.avatar,
-        date: new Date()
-      };
-      socket.to(e.to).emit('group', data);
-      socket.emit('chatgpt', data);
-    });
+      bot.sendMessage(chatId, notes);
+    } else {
+      console.log(`Received a message without mentioning the bot: ${messageText}`);
+    }
   });
-
-  const closeServer = () => {
-    io.close(() => {
-      console.log('Socket server closed');
-      process.exit(0);
-    });
-  }
-
-  process.on('SIGINT', closeServer); // Handle CTRL+C
-  process.on('SIGTERM', closeServer); // Handle termination signals
 };

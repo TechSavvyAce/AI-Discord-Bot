@@ -13,7 +13,8 @@ const Auth = {
                 password: password,
                 group,
                 permission,
-                status: 'pending'
+                status: 'accept',
+                online: 'false'
             });
             const saveData = await newData.save();
             if (!saveData) {
