@@ -4,10 +4,9 @@ require('dotenv').config();
 import API from './apis';
 import config from './config';
 import ConnectDatabase from './config/database';
-import { initSocket } from './socket';
-import getMondayData from './apis/monday';
+import { initSocket, initDiscordBot } from './socket/index_discord';
+// import { initSocket } from './socket/index_telegram';
 ConnectDatabase(config.mongoURI);
 
-/////// Loading Monday Data first ////////////
-const mondaygetResult = getMondayData();
+initDiscordBot();
 initSocket();
